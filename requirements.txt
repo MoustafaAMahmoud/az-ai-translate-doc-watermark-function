@@ -1,0 +1,7 @@
+requests
+azure-functions
+azure-storage-blob
+PyPDF2
+reportlab
+docx2pdf
+python-docx
