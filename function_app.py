@@ -1,76 +1,108 @@
 import logging
+import os
+import urllib.parse
 import azure.functions as func
-import requests
-import io
-import json
-from docx2pdf import convert
+from azure.storage.blob import BlobServiceClient
 from PyPDF2 import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
-from azure.storage.blob import BlobServiceClient
 import tempfile
-import os
+import subprocess
+from datetime import datetime
+import requests
+import io
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 
-# Define variables for Azure storage
-azure_storage_account = "translationservices2024"
-container_name = "landing-zone"
+# Read environment variables from Azure Function App settings
+azure_storage_account = os.getenv("AZURE_STORAGE_ACCOUNT")
+sas_token = os.getenv("SAS_TOKEN")
+storage_account_key = os.getenv("STORAGE_ACCOUNT_KEY")
 
-# Construct the SAS token and Blob service client
-sas_token = "sp=racwdli&st=2024-06-11T08:30:05Z&se=2024-07-06T16:30:05Z&spr=https&sv=2022-11-02&sr=c&sig=CnovetFjr%2F%2BwWu80eBO2do0oEaqcm6E1hW7nTiB5TN4%3D"
+# Log environment variables to check if they exist
+logging.info(f"AZURE_STORAGE_ACCOUNT: {azure_storage_account}")
+logging.info(f"SAS_TOKEN: {sas_token}")
+logging.info(f"STORAGE_ACCOUNT_KEY: {storage_account_key}")
+
+# Define your container and blob prefix
+container_name = "translation-service"
+upload_prefix = "translated-zone"
+watermarked_output_prefix = "translated-zone"
+
+# Construct the Blob service client
 blob_service_client = BlobServiceClient(account_url=f"https://{azure_storage_account}.blob.core.windows.net", credential=sas_token)
 
-app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
+app = func.FunctionApp()
 
-@app.route(route="document_watermark_function")
-def document_watermark_function(req: func.HttpRequest) -> func.HttpResponse:
-    """
-    Azure Function to add a watermark to a PDF document.
-    
-    Input:
-    - HttpRequest: JSON payload containing 'translated_file_name'.
-    
-    Output:
-    - HttpResponse: JSON response with status and watermarked document URL.
-    """
-    logging.info('Watermark Function: Python HTTP trigger function processed a request.')
+@app.blob_trigger(arg_name="myblob", path=f"{container_name}/{upload_prefix}/{{name}}.docx", connection="BlobStorageConnectionString")
+def document_watermark_function(myblob: func.InputStream):
+    logging.info(f"Blob trigger function processing blob: {myblob.name}")
+    logging.info(f"Blob size: {myblob.length} bytes")
+    logging.info('Watermark Function: Python Blob trigger function processed a request.')
 
     try:
-        # Extract translated_file_name from request
-        req_body = req.get_json()
-        translated_file_name = req_body.get('translated_file_name')
-        if not translated_file_name:
-            raise ValueError("Translated file name not provided")
+        file_name = myblob.name.split('/')[-1]
+        logging.info(f"Extracted file name: {file_name}")
+        logging.info(f"Full path: {myblob.name}")
 
-        # Download the translated document
-        blob_client = blob_service_client.get_blob_client(container=container_name, blob=translated_file_name)
-        download_stream = blob_client.download_blob()
-        file_content = download_stream.readall()
+        # Filter out unwanted file types
+        if not (file_name.endswith('.docx') or file_name.endswith('.pdf')):
+            logging.info(f"File type not supported for translation: {file_name}")
+            return
 
-        if translated_file_name.endswith('.docx'):
+        encoded_file_name = urllib.parse.quote(file_name)
+        source_url = f"https://{azure_storage_account}.blob.core.windows.net/{container_name}/{upload_prefix}/{encoded_file_name}?{sas_token}"
+        logging.info(f"Source URL: {source_url}")
+        logging.info(f"Encoded file name: {encoded_file_name}")
+
+        # Validate the existence of the source URL
+        if not validate_source_url(source_url):
+            logging.error("Source file does not exist")
+            return
+
+        # Read the file content from the blob
+        file_content = myblob.read()
+        logging.info(f"Read file content, size: {len(file_content)} bytes")
+
+        if file_name.endswith('.docx'):
             # Convert .docx to .pdf
             pdf_content = convert_docx_to_pdf(file_content)
-        elif translated_file_name.endswith('.pdf'):
+        elif file_name.endswith('.pdf'):
             pdf_content = file_content
-        else:
-            raise ValueError("Unsupported file type")
+
+        logging.info(f"PDF content length: {len(pdf_content)} bytes")
 
         # Add watermark to the PDF
         watermarked_content = add_pdf_watermark(pdf_content)
+        logging.info(f"Watermarked PDF content length: {len(watermarked_content)} bytes")
 
-        # Upload the watermarked document back to Azure Blob Storage
-        watermarked_blob_name = f"watermarked_{translated_file_name.rsplit('.', 1)[0]}.pdf"
+        # Add timestamp to the target file name
+        timestamp = int(datetime.now().timestamp())
+        watermarked_blob_name = f"{watermarked_output_prefix}/watermarked_{timestamp}_{file_name.rsplit('.', 1)[0]}.pdf"
         watermarked_blob_client = blob_service_client.get_blob_client(container=container_name, blob=watermarked_blob_name)
         watermarked_blob_client.upload_blob(watermarked_content, overwrite=True)
-
         logging.info(f"Watermarked document uploaded to: {watermarked_blob_name}")
-        return func.HttpResponse(json.dumps({"status": "Success", "watermarked_document_url": f"https://{azure_storage_account}.blob.core.windows.net/{container_name}/{watermarked_blob_name}"}), status_code=200)
-    
+
     except Exception as e:
-        logging.error(f"Error in Watermark Function: {str(e)}")
-        return func.HttpResponse(json.dumps({"status": "Error", "message": str(e)}), status_code=500)
+        logging.error(f"Error in Watermark Function: {str(e)}", exc_info=True)
+
+def validate_source_url(url):
+    """
+    Validates if the source URL exists.
+
+    Input:
+    - url: The URL to be validated.
+
+    Output:
+    - True if the URL exists, False otherwise.
+    """
+    try:
+        response = requests.head(url)
+        return response.status_code == 200
+    except Exception as e:
+        logging.error(f"Error validating source URL: {str(e)}", exc_info=True)
+        return False
 
 def add_pdf_watermark(pdf_content, watermark_text="AI Translated"):
     """
@@ -114,15 +146,16 @@ def add_pdf_watermark(pdf_content, watermark_text="AI Translated"):
                 output_pdf.add_page(page)
 
             output_pdf.write(output_pdf_stream)
+            logging.debug(f"Watermark added to PDF.")
             return output_pdf_stream.getvalue()
 
     except Exception as e:
-        logging.error(f"Error adding watermark: {str(e)}")
+        logging.error(f"Error adding watermark: {str(e)}", exc_info=True)
         raise
 
 def convert_docx_to_pdf(docx_content):
     """
-    Converts a .docx file content to .pdf.
+    Converts a .docx file content to .pdf using LibreOffice.
 
     Input:
     - docx_content: The content of the .docx file.
@@ -137,15 +170,18 @@ def convert_docx_to_pdf(docx_content):
 
             with open(docx_path, "wb") as f:
                 f.write(docx_content)
+            logging.debug(f"Wrote .docx content to {docx_path}")
 
-            # Convert .docx to .pdf
-            convert(docx_path, pdf_path)
+            # Convert .docx to .pdf using LibreOffice
+            subprocess.run(["libreoffice", "--headless", "--convert-to", "pdf", docx_path, "--outdir", tmpdirname], check=True)
+            logging.debug(f"Converted .docx to .pdf using LibreOffice, output path: {pdf_path}")
 
             # Read the .pdf file content
             with open(pdf_path, "rb") as f:
                 pdf_content = f.read()
+            logging.debug(f"Read .pdf content from {pdf_path}")
 
         return pdf_content
     except Exception as e:
-        logging.error(f"Error converting .docx to .pdf: {str(e)}")
+        logging.error(f"Error converting .docx to .pdf: {str(e)}", exc_info=True)
         raise
