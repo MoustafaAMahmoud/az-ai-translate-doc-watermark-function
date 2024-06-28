@@ -1,5 +1,5 @@
 
-To build and push a Docker image to Azure Container Registry (ACR) using Podman, follow these steps based on your provided Dockerfile:1. **Create a `Dockerfile`**:
+To build and push a Docker image to Azure Container Registry (ACR) using docker, follow these steps based on your provided Dockerfile:1. **Create a `Dockerfile`**:
    Save the following content into a file named `Dockerfile`:
 
    ```dockerfile
@@ -25,25 +25,33 @@ To build and push a Docker image to Azure Container Registry (ACR) using Podman,
    az acr login --name pdfwatermarkregistry
    ```
 
-3. **Log in to ACR using Podman**:
+3. **Log in to ACR using docker**:
    ```sh
-   podman login pdfwatermarkregistry.azurecr.io
+   docker login pdfwatermarkregistry.azurecr.io
    ```
 
 4. **Build the Docker image**:
    Navigate to the directory containing your `Dockerfile` and run:
    ```sh
-   podman build -t watermark_function_app .
+   acr login --name <acrname>
+   docker build -t <imagename>:<tagname>
+
+   docker build -t watermark_function_app .
    ```
 
 5. **Tag the Docker image**:
    ```sh
-   podman tag watermark_function_app pdfwatermarkregistry.azurecr.io/watermark_function_app
+   docker tag <imagename>:<tagname> <acrname>.azurecr.io/<imagename>:<tagname>
+
+   docker tag watermark_function_app:latest funcaddwatermark588173.azurecr.io/func-add-watermark:latest
+
    ```
 
 6. **Push the Docker image to ACR**:
    ```sh
-   podman push pdfwatermarkregistry.azurecr.io/watermark_function_app
+   docker push <acrname>.azurecr.io/<imagename>:<tagname>
+
+   docker push funcaddwatermark588173.azurecr.io/func-add-watermark
    ```
 
 7. **Verify the image in ACR**:
