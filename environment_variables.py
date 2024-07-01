@@ -3,7 +3,7 @@ import logging
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     encoding="utf-8",
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
