@@ -15,22 +15,43 @@ from datetime import datetime
 import urllib.parse
 from database_helper import update_watermark_file_record
 
-app = func.FunctionApp()
+# app = func.FunctionApp()
+
+app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 
-@app.blob_trigger(
-    arg_name="myblob",
-    path="translation-service/translated-zone/{name}",
-    connection="BlobStorageConnectionString",
-)
-def translation_service_watermark_function(myblob: func.InputStream):
+@app.route(route="add_water_mark", methods=["POST"])
+def add_water_mark(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    Handle the file upload request, save the file to a temporary location,
+    upload it to Azure Blob Storage, and log the upload details in the database.
 
-    logging.info(f"Blob trigger function processing blob: {myblob.name}")
-    logging.info(f"Blob size: {myblob.length} bytes")
+    Args:
+        req (func.HttpRequest): The HTTP request object.
 
-    file_name = myblob.name.split("/")[-1]
-    logging.info(f"Extracted file name: {file_name}")
-    logging.info(f"Full path: {myblob.name}")
+    Returns:
+        func.HttpResponse: The HTTP response object with the status of the upload.
+    """
+    logging.info("Python HTTP trigger function to upload a file processed a request.")
+
+    # Get the file and language details from the request
+    file_name = req.files.get("file_name")
+    logging.info(f"File: {file_name.filename}")
+
+    # @app.blob_trigger(
+    #     arg_name="myblob",
+    #     path="translation-service/translated-zone/{name}",
+    #     connection="BlobStorageConnectionString",
+    # )
+    # def translation_service_watermark_function(myblob: func.InputStream):
+
+    #     logging.info(f"Blob trigger function processing blob: {myblob.name}")
+    #     logging.info(f"Blob size: {myblob.length} bytes")
+
+    #     file_name = myblob.name.split("/")[-1]
+    #     logging.info(f"Extracted file name: {file_name}")
+    #     logging.info(f"Full path: {myblob.name}")
+
     input_file_path = file_name
     # Filter out unwanted file types
     if not (file_name.endswith(".docx") or file_name.endswith(".pdf")):
