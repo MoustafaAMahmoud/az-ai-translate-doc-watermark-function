@@ -1,24 +1,28 @@
+"""
+Azure Function App to handle file uploads, save to temporary location,
+upload to Azure Blob Storage, and log the upload details.
+"""
+
 import logging
 import os
 import tempfile
 import subprocess
-import azure.functions as func
-from azure.storage.blob import BlobServiceClient
-from PyPDF2 import PdfReader, PdfWriter
-import requests
+import urllib.parse
 import io
-from blob_handler import *
-from environment_variables import *
+from datetime import datetime
+import azure.functions as func
+from azure.storage.blob import BlobServiceClient, BlobClient
+from PyPDF2 import PdfReader, PdfWriter
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
-from datetime import datetime
-import urllib.parse
 from database_helper import update_watermark_file_record
+from blob_handler import validate_source_url, upload_to_blob
+from environment_variables import azure_storage_account, sas_token, container_name, upload_prefix, watermark_prefix
 
-# app = func.FunctionApp()
+# Initialize the BlobServiceClient
+blob_service_client = BlobServiceClient.from_connection_string(os.getenv("BlobStorageConnectionString"))
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
-
 
 @app.route(route="add_water_mark", methods=["POST"])
 def add_water_mark(req: func.HttpRequest) -> func.HttpResponse:
@@ -34,51 +38,42 @@ def add_water_mark(req: func.HttpRequest) -> func.HttpResponse:
     """
     logging.info("Python HTTP trigger function to upload a file processed a request.")
 
-    # Get the file and language details from the request
-    file_name = req.files.get("file_name")
-    logging.info(f"File: {file_name.filename}")
-
-    # @app.blob_trigger(
-    #     arg_name="myblob",
-    #     path="translation-service/translated-zone/{name}",
-    #     connection="BlobStorageConnectionString",
-    # )
-    # def translation_service_watermark_function(myblob: func.InputStream):
-
-    #     logging.info(f"Blob trigger function processing blob: {myblob.name}")
-    #     logging.info(f"Blob size: {myblob.length} bytes")
-
-    #     file_name = myblob.name.split("/")[-1]
-    #     logging.info(f"Extracted file name: {file_name}")
-    #     logging.info(f"Full path: {myblob.name}")
-
-    input_file_path = file_name
-    # Filter out unwanted file types
-    if not (file_name.endswith(".docx") or file_name.endswith(".pdf")):
-        logging.info(f"File type not supported for translation: {file_name}")
-        return
-
     try:
+        # Get the file name from the request
+        file_name = req.params.get("file_name")
+        input_file_path = file_name
+        if not file_name:
+            return func.HttpResponse("File name not provided.", status_code=400)
+
+        logging.info("File: %s", file_name)
+
+        # Define the source URL
         encoded_file_name = urllib.parse.quote(file_name)
-        source_url = f"https://{azure_storage_account}.blob.core.windows.net/{container_name}/{upload_prefix}/{encoded_file_name}?{sas_token}"
-        logging.info(f"Source URL: {source_url}")
-        logging.info(f"Encoded file name: {encoded_file_name}")
+        source_url = (
+            f"https://{azure_storage_account}.blob.core.windows.net/"
+            f"{container_name}/{upload_prefix}/{encoded_file_name}?{sas_token}"
+        )
+        logging.info("Source URL: %s", source_url)
 
         # Validate the existence of the source URL
         if not validate_source_url(source_url):
-            logging.error("Source file does not exist: {source_url}")
-            return
+            logging.error("Source file does not exist: %s", source_url)
+            return func.HttpResponse("Source file does not exist.", status_code=404)
 
-        file_content = myblob.read()
-        logging.info(f"File content read successfully.")
+        # Read the file content from the source URL
+        blob_client = BlobClient.from_blob_url(source_url)
+        downloader = blob_client.download_blob()
+        file_content = downloader.readall()
+        logging.info("File content read successfully.")
 
         if file_name.endswith(".docx"):
             pdf_content = convert_docx_to_pdf(file_content)
             pdf_content = add_pdf_watermark(pdf_content)
-            file_name = file_name.replace(".docx", ".pdf")
+            new_file_name = file_name.replace(".docx", ".pdf")
         elif file_name.endswith(".pdf"):
             pdf_content = file_content
             pdf_content = add_pdf_watermark(file_content)
+            new_file_name = file_name
         else:
             return func.HttpResponse("Unsupported file type.", status_code=400)
 
@@ -87,16 +82,16 @@ def add_water_mark(req: func.HttpRequest) -> func.HttpResponse:
             sas_token,
             container_name,
             watermark_prefix,
-            file_name,
+            new_file_name,
             pdf_content,
         )
-        logging.info(f"File URL: {file_url}")
+        logging.info("File URL: %s", file_url)
         watermark_date = datetime.now().date()
         watermark_datetime = datetime.now()
         watermark_zone_path = file_url
         watermark_status = "done"
 
-        logging.info(f"Updating the watermark record in the database.")
+        logging.info("Updating the watermark record in the database.")
         update_watermark_file_record(
             input_file_path,
             watermark_date,
@@ -104,19 +99,22 @@ def add_water_mark(req: func.HttpRequest) -> func.HttpResponse:
             watermark_status,
             watermark_zone_path,
         )
-        logging.info(f"Watermark record updated successfully.")
+        logging.info("Watermark record updated successfully.")
+
+        return func.HttpResponse(
+            f"File {new_file_name} uploaded successfully", status_code=200
+        )
 
     except Exception as e:
-        logging.info("Update watermark file record status in database.")
+        logging.error("Error processing the request: %s", str(e), exc_info=True)
         update_watermark_file_record(
             input_file_path,
-            watermark_date,
-            watermark_datetime,
+            datetime.now().date(),
+            datetime.now(),
             "failed",
-            watermark_zone_path,
+            ""
         )
-        logging.info("Watermark record updated successfully.")
-        logging.error(f"Error processing the request: {str(e)}", exc_info=True)
+        return func.HttpResponse("Internal Server Error", status_code=500)
 
 
 def convert_docx_to_pdf(docx_content):
@@ -136,7 +134,7 @@ def convert_docx_to_pdf(docx_content):
 
             with open(docx_path, "wb") as f:
                 f.write(docx_content)
-            logging.debug(f"Wrote .docx content to {docx_path}")
+            logging.debug("Wrote .docx content to %s", docx_path)
 
             # Convert .docx to .pdf using LibreOffice
             subprocess.run(
@@ -151,18 +149,16 @@ def convert_docx_to_pdf(docx_content):
                 ],
                 check=True,
             )
-            logging.debug(
-                f"Converted .docx to .pdf using LibreOffice, output path: {pdf_path}"
-            )
+            logging.debug("Converted .docx to .pdf using LibreOffice, output path: %s", pdf_path)
 
             # Read the .pdf file content
             with open(pdf_path, "rb") as f:
                 pdf_content = f.read()
-            logging.debug(f"Read .pdf content from {pdf_path}")
+            logging.debug("Read .pdf content from %s", pdf_path)
 
         return pdf_content
     except Exception as e:
-        logging.error(f"Error converting .docx to .pdf: {str(e)}", exc_info=True)
+        logging.error("Error converting .docx to .pdf: %s", str(e), exc_info=True)
         raise
 
 
@@ -178,9 +174,7 @@ def add_pdf_watermark(pdf_content, watermark_text="AI Translated"):
     - Watermarked PDF content.
     """
     try:
-        with io.BytesIO(
-            pdf_content
-        ) as input_pdf_stream, io.BytesIO() as output_pdf_stream:
+        with io.BytesIO(pdf_content) as input_pdf_stream, io.BytesIO() as output_pdf_stream:
             input_pdf = PdfReader(input_pdf_stream)
             output_pdf = PdfWriter()
 
@@ -210,9 +204,9 @@ def add_pdf_watermark(pdf_content, watermark_text="AI Translated"):
                 output_pdf.add_page(page)
 
             output_pdf.write(output_pdf_stream)
-            logging.debug(f"Watermark added to PDF.")
+            logging.debug("Watermark added to PDF.")
             return output_pdf_stream.getvalue()
 
     except Exception as e:
-        logging.error(f"Error adding watermark: {str(e)}", exc_info=True)
+        logging.error("Error adding watermark: %s", str(e), exc_info=True)
         raise
