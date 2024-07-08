@@ -1,3 +1,7 @@
+"""
+Module for handling environment variables and logging their values.
+"""
+
 import os
 import logging
 
@@ -9,14 +13,17 @@ logging.basicConfig(
 )
 
 # Read environment variables from Azure Function App settings
-azure_storage_account = os.getenv("AZURE_STORAGE_ACCOUNT")
-sas_token = os.getenv("SAS_TOKEN")
-storage_account_key = os.getenv("STORAGE_ACCOUNT_KEY")
-watermark_prefix = os.getenv("WATERMARK_PREFIX")
-container_name = "translation-service"
-upload_prefix = "translated-zone"
+AZURE_STORAGE_ACCOUNT = os.getenv("AZURE_STORAGE_ACCOUNT")
+SAS_TOKEN = os.getenv("SAS_TOKEN")
+STORAGE_ACCOUNT_KEY = os.getenv("STORAGE_ACCOUNT_KEY")
+WATERMARK_PREFIX = os.getenv("WATERMARK_PREFIX")
+CONTAINER_NAME = "translation-service"
+UPLOAD_PREFIX = "translated-zone"
+
 # Log environment variables to check if they exist
-logging.info(f"AZURE_STORAGE_ACCOUNT: {azure_storage_account}")
-logging.info(f"SAS_TOKEN: {sas_token}")
-logging.info(f"STORAGE_ACCOUNT_KEY: {storage_account_key}")
-logging.info(f"WATERMARK_PREFIX: {watermark_prefix}")
+logging.info("AZURE_STORAGE_ACCOUNT: %s", AZURE_STORAGE_ACCOUNT)
+logging.info("SAS_TOKEN: %s", SAS_TOKEN)
+logging.info("STORAGE_ACCOUNT_KEY: %s", STORAGE_ACCOUNT_KEY)
+logging.info("WATERMARK_PREFIX: %s", WATERMARK_PREFIX)
+logging.info("CONTAINER_NAME: %s", CONTAINER_NAME)
+logging.info("UPLOAD_PREFIX: %s", UPLOAD_PREFIX)
