@@ -27,7 +27,14 @@ To build and push a Docker image to Azure Container Registry (ACR) using docker,
    docker tag watermark_function_app:latest funcaddwatermark588173.azurecr.io/func-add-watermark:latest
    docker push funcaddwatermark588173.azurecr.io/func-add-watermark
    ```
-
+```sh
+ az eventgrid event-subscription create `
+   --name $eventSubscriptionName `
+   --source-resource-id $sourceResourceId `
+   --endpoint $endpoint `
+   --included-event-types Microsoft.Storage.BlobCreated `
+   --subject-begins-with "/blobServices/default/containers/translation-service/blobs/translated-zone/"
+```
 3. **Log in to ACR using docker**:
    ```sh
    docker login pdfwatermarkregistry.azurecr.io
